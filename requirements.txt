@@ -22,8 +22,8 @@
   tensorboard==2.9.1
   textstat>=0.7.10
   tokenizers==0.21.0
-  torch==2.3.1
-  torchaudio==2.3.1
+  torch==2.4.1
+  torchaudio==2.4.1
   tqdm>=4.67.1
   transformers==4.52.1
   WeTextProcessing
