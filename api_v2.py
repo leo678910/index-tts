@@ -128,6 +128,8 @@ def run_synthesis_task(task_id: str, text: str, original_ref_filename: str):
         logger.info(f"[{task_id}] Starting IndexTTS2 inference...")
         
         result_path = tts_model.infer(
+            intelligent_split_len=25,
+            #num_beams=1,
             spk_audio_prompt=ref_audio_path, 
             text=text, 
             output_path=output_filepath, # 直接指定输出路径
