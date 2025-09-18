@@ -1,4 +1,5 @@
 import os
+import re
 from subprocess import CalledProcessError
 
 os.environ['HF_HUB_CACHE'] = './checkpoints/hf_cache'
@@ -311,7 +312,7 @@ class IndexTTS2:
               emo_audio_prompt=None, emo_alpha=1.0,
               emo_vector=None,
               use_emo_text=False, emo_text=None, use_random=False, interval_silence=200,
-              verbose=False, max_text_tokens_per_segment=120, **generation_kwargs):
+              verbose=False, intelligent_split_len=40, **generation_kwargs):
         print(">> starting inference...")
         self._set_gr_progress(0, "starting inference...")
         if verbose:
@@ -419,13 +420,18 @@ class IndexTTS2:
             emo_cond_emb = self.cache_emo_cond
 
         self._set_gr_progress(0.1, "text processing...")
-        text_tokens_list = self.tokenizer.tokenize(text)
-        segments = self.tokenizer.split_segments(text_tokens_list, max_text_tokens_per_segment)
+        #text_tokens_list = self.tokenizer.tokenize(text)
+        #segments = self.tokenizer.split_segments(text_tokens_list, max_text_tokens_per_segment)
+        #-----修改-----
+        intelligent_split_len = generation_kwargs.get("intelligent_split_len", 40)
+        segments = intelligent_split(text, max_len=intelligent_split_len)
+        #-----修改-----
+
         segments_count = len(segments)
         if verbose:
-            print("text_tokens_list:", text_tokens_list)
+            #print("text_tokens_list:", text_tokens_list)
             print("segments count:", segments_count)
-            print("max_text_tokens_per_segment:", max_text_tokens_per_segment)
+            #print("max_text_tokens_per_segment:", max_text_tokens_per_segment)
             print(*segments, sep="\n")
         do_sample = generation_kwargs.pop("do_sample", True)
         top_p = generation_kwargs.pop("top_p", 0.8)
@@ -433,7 +439,7 @@ class IndexTTS2:
         temperature = generation_kwargs.pop("temperature", 0.8)
         autoregressive_batch_size = 1
         length_penalty = generation_kwargs.pop("length_penalty", 0.0)
-        num_beams = generation_kwargs.pop("num_beams", 3)
+        num_beams = generation_kwargs.get("num_beams", 1)
         repetition_penalty = generation_kwargs.pop("repetition_penalty", 10.0)
         max_mel_tokens = generation_kwargs.pop("max_mel_tokens", 1500)
         sampling_rate = 22050
@@ -448,7 +454,10 @@ class IndexTTS2:
             self._set_gr_progress(0.2 + 0.7 * seg_idx / segments_count,
                                   f"speech synthesis {seg_idx + 1}/{segments_count}...")
 
-            text_tokens = self.tokenizer.convert_tokens_to_ids(sent)
+            #text_tokens = self.tokenizer.convert_tokens_to_ids(sent)
+            sent_tokens = self.tokenizer.tokenize(sent)
+    # 2. 再将 token 列表转换成 ID 列表
+            text_tokens = self.tokenizer.convert_tokens_to_ids(sent_tokens)
             text_tokens = torch.tensor(text_tokens, dtype=torch.int32, device=self.device).unsqueeze(0)
             if verbose:
                 print(text_tokens)
@@ -729,6 +738,66 @@ class QwenEmotion:
             # print(">>  after vec swap", content)
 
         return self.convert(content)
+
+def intelligent_split(text: str, max_len: int = 40, force_split_at_comma: bool = True):
+    """
+    根据语义和长度双重约束对文本进行智能分句。
+
+    Args:
+        text (str): 原始输入文本。
+        max_len (int): 句子的软长度上限。当一个子句超过这个长度时，会考虑在逗号处切分。
+        force_split_at_comma (bool): 是否在逗号且超长时强制切分。
+
+    Returns:
+        List[str]: 切分后的句子列表。
+    """
+    # 1. 使用正则表达式，在所有“强”结束符（。！？…）和“弱”结束符（，；）后添加一个特殊标记
+    # 正则表达式：(?<=[。！？…]) 表示匹配这些符号后面的位置
+    #            (?<=[，；]) 表示匹配这些符号后面的位置
+    text = re.sub(r'(?<=[。！？…])', '@@@', text)
+    if force_split_at_comma:
+        text = re.sub(r'(?<=[，；])', '###', text) # 用不同的标记区分强弱
+
+    # 2. 将文本按“强”结束符切分成初始片段
+    segments = text.split('@@@')
+    
+    final_sentences = []
+    
+    for seg in segments:
+        seg = seg.strip()
+        if not seg:
+            continue
+            
+        # 3. 检查每个强分段的长度
+        if len(seg) <= max_len or not force_split_at_comma:
+            # 如果分段本身不长，或者我们不强制按逗号切分，直接采纳
+            # 去掉可能存在的弱标记，因为我们不在这里切分
+            final_sentences.append(seg.replace('###', ''))
+        else:
+            # 4. 如果强分段过长，需要根据“弱”结束符（逗号）进一步切分
+            sub_segments = seg.split('###')
+            
+            current_sentence = ""
+            for sub_seg in sub_segments:
+                sub_seg = sub_seg.strip()
+                if not sub_seg:
+                    continue
+                
+                # 5. 贪心策略：如果把下一个子句加上，不会超过软上限，就加上
+                if current_sentence and len(current_sentence) + len(sub_seg) + 1 <= max_len:
+                    current_sentence += f"，{sub_seg}" # 注意补回逗号
+                else:
+                    # 否则，旧的句子结束，开启一个新的句子
+                    if current_sentence:
+                        final_sentences.append(current_sentence)
+                    current_sentence = sub_seg
+            
+            # 不要忘记最后一个正在构建的句子
+            if current_sentence:
+                final_sentences.append(current_sentence)
+
+    # 清理掉空的字符串
+    return [s.strip() for s in final_sentences if s.strip()]
 
 
 if __name__ == "__main__":
