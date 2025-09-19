@@ -584,7 +584,9 @@ class IndexTTS2:
                 if verbose:
                     print(f"wav shape: {wav.shape}", "min:", wav.min(), "max:", wav.max())
                 # wavs.append(wav[:, :-512])
-                wavs.append(wav.cpu())  # to cpu before saving
+                #wavs.append(wav.cpu())  # to cpu before saving
+                wavs.append(wav.detach().cpu())
+
         end_time = time.perf_counter()
 
         self._set_gr_progress(0.9, "saving audio...")
